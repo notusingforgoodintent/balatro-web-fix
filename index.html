@@ -3,32 +3,48 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, minimum-scale=1, maximum-scale=1">
-    <title>Balatro Fullscreen</title>
+    <title>Balatro Fullscreen (Debug Mode)</title>
     
     <style>
+        /* 1. THE GAME CSS */
         body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: black;
-            overflow: hidden;
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: black; overflow: hidden;
         }
         canvas {
-            display: block;
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw !important;
-            height: 100vh !important;
+            display: block; position: absolute; top: 0; left: 0;
+            width: 100vw !important; height: 100vh !important;
             z-index: 1;
         }
-        #loadingCanvas {
-            z-index: 10;
+        #loadingCanvas { z-index: 10; }
+
+        /* 2. THE CUSTOM DEBUG CONSOLE CSS */
+        #custom-console {
+            display: none; /* Hidden by default */
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            padding: 20px;
+            z-index: 99999;
+            overflow-y: scroll;
+            white-space: pre-wrap;
+            pointer-events: auto;
         }
+        .log-error { color: #ff3333; font-weight: bold; }
+        .log-warn { color: #ffff33; }
+        .log-network { color: #33ffff; }
     </style>
   </head>
   <body>
+    
+    <div id="custom-console">
+      <div><strong>--- DEBUG CONSOLE (Press '[' to toggle) ---</strong></div>
+      <div id="console-output"></div>
+    </div>
+
     <center>
       <div>
         <canvas id="loadingCanvas" oncontextmenu="event.preventDefault()" width="800" height="600"></canvas>
@@ -37,18 +53,81 @@
     </center>
 
     <script type='text/javascript'>
-      /* RESIZE LOGIC */
+      // --- PART 1: THE INTERCEPTOR SCRIPT (Runs first) ---
+      
+      // 1. Setup variables
+      var consoleDiv = document.getElementById('custom-console');
+      var outputDiv = document.getElementById('console-output');
+      var isConsoleOpen = false;
+
+      // 2. Function to write to our fake screen
+      function logToScreen(type, args) {
+          var msg = Array.from(args).map(a => {
+              try { return (typeof a === 'object') ? JSON.stringify(a) : String(a); } 
+              catch(e) { return String(a); }
+          }).join(' ');
+
+          var line = document.createElement('div');
+          var time = new Date().toISOString().split('T')[1].slice(0, -1);
+          line.textContent = `[${time}] ${msg}`;
+          
+          if (type === 'ERROR') line.className = 'log-error';
+          else if (type === 'WARN') line.className = 'log-warn';
+          else if (type === 'NET') line.className = 'log-network';
+
+          outputDiv.appendChild(line);
+      }
+
+      // 3. Intercept standard Console Logs
+      var originalLog = console.log;
+      var originalErr = console.error;
+      var originalWarn = console.warn;
+
+      console.log = function() { logToScreen('INFO', arguments); originalLog.apply(console, arguments); };
+      console.error = function() { logToScreen('ERROR', arguments); originalErr.apply(console, arguments); };
+      console.warn = function() { logToScreen('WARN', arguments); originalWarn.apply(console, arguments); };
+
+      // 4. Intercept Network Requests (XMLHttpRequest) - This catches game.love download
+      var originalXHR = window.XMLHttpRequest;
+      window.XMLHttpRequest = function() {
+          var xhr = new originalXHR();
+          var originalOpen = xhr.open;
+          
+          xhr.open = function(method, url) {
+              logToScreen('NET', [`Request Started: ${method} ${url}`]);
+              
+              xhr.addEventListener('load', function() {
+                  if(xhr.status === 200) {
+                      logToScreen('NET', [`Request Success: ${url} (${(xhr.response.byteLength / 1024 / 1024).toFixed(2)} MB)`]);
+                  } else {
+                      logToScreen('ERROR', [`Request FAILED: ${url} [Status: ${xhr.status}]`]);
+                  }
+              });
+              
+              xhr.addEventListener('error', function() {
+                  logToScreen('ERROR', [`Network Error on: ${url}`]);
+              });
+              
+              return originalOpen.apply(this, arguments);
+          }
+          return xhr;
+      };
+
+      // 5. Keyboard Toggle Logic (The '[' key)
+      window.addEventListener('keydown', function(e) {
+          if (e.key === '[' || e.code === 'BracketLeft') {
+              isConsoleOpen = !isConsoleOpen;
+              consoleDiv.style.display = isConsoleOpen ? 'block' : 'none';
+          }
+      });
+
+      // --- PART 2: THE GAME LOGIC ---
+
       function resizeGame() {
         var gameCanvas = document.getElementById("canvas");
         var loadCanvas = document.getElementById("loadingCanvas");
-        if (gameCanvas) { 
-            gameCanvas.width = window.innerWidth; 
-            gameCanvas.height = window.innerHeight; 
-        }
-        if (loadCanvas) { 
-            loadCanvas.width = window.innerWidth; 
-            loadCanvas.height = window.innerHeight; 
-        }
+        if (gameCanvas) { gameCanvas.width = window.innerWidth; gameCanvas.height = window.innerHeight; }
+        if (loadCanvas) { loadCanvas.width = window.innerWidth; loadCanvas.height = window.innerHeight; }
       }
       window.addEventListener('resize', resizeGame, false);
       window.addEventListener('load', resizeGame, false);
@@ -68,8 +147,8 @@
       window.onclick = function () { window.focus(); };
 
       var Module = {
-        arguments: ["./game.love"], /* MAKE SURE YOUR FILE IS NAMED game.love */
-        INITIAL_MEMORY: 256000000, /* Fixed: Increased memory back to 256MB */
+        arguments: ["./game.love"], 
+        INITIAL_MEMORY: 167772160, 
         printErr: console.error.bind(console),
         canvas: (function() {
           var canvas = document.getElementById('canvas');
@@ -79,6 +158,7 @@
         setStatus: function(text) {
           if (text) {
             drawLoadingText(text);
+            console.log("Status Update: " + text); // Log status to our custom console
           } else if (Module.remainingDependencies === 0) {
             document.getElementById('loadingCanvas').style.display = 'none';
             document.getElementById('canvas').style.visibility = 'visible';
@@ -93,7 +173,6 @@
           Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
         }
       };
-      Module.setStatus('Downloading...');
       
       window.onerror = function(event) {
         Module.setStatus('Exception thrown, see JavaScript console');
@@ -102,7 +181,6 @@
         };
       };
 
-      /* Fixed: Added the missing applicationLoad function */
       var applicationLoad = function(e) {
         Love(Module);
       }
